@@ -1,0 +1,5 @@
+rm(list=ls())
+library(dplR)
+data(co021)
+co021RWI <- detrend(co021,method="AgeD")
+write_csv(data.frame(Year=time(co021),co021RWI),"co021RWI.csv")

@@ -26,14 +26,14 @@ series2sound <- function(series, m=10,
   indicies <- order(y,decreasing = TRUE)[1:m]
 
   # make into wave -- vectorize this?
-  res <- rep(0,nrow = length(tSecs))
+  outWave <- rep(0,nrow = length(tSecs))
   for(i in 1:m){
     idm <- indicies[i]
-    res <- res + y[idm]*sin(2*pi*xScaled[idm]*tSecs)
+    outWave <- outWave + y[idm]*sin(2*pi*xScaled[idm]*tSecs)
   }
-  res <- Wave(left = res, right= res,
+  outWave <- Wave(left = outWave, right= outWave,
                     samp.rate = sampRate, bit=16)
-  res <- normalize(object = res, unit = "16") # 16 bit
+  outWave <- normalize(object = outWave, unit = "16") # 16 bit
 
-  return(res)
+  return(outWave)
 }
