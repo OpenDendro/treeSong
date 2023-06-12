@@ -3,6 +3,7 @@ library(shinyWidgets)
 library(tidyverse)
 library(tuneR)
 require(cowplot)
+library(shinythemes)
 source("series2sound.R")
 
 # load data
@@ -16,14 +17,13 @@ addResourcePath("www", "www")
 
 
 ui <- fluidPage(
+  theme = shinytheme("superhero"),
   sidebarLayout(
     # Sidebar panel for inputs
     sidebarPanel(
-      h3("Upload Series"),
-      #includeMarkdown("text_upload.rmd"),
-      p("First col must be time, subsequent cols are series. Headers required"),
+      includeMarkdown("text_upload.rmd"),
       hr(),
-      h4("CSV File"),
+      p("CSV File"),
       fileInput(inputId="file1",
                 label=NULL,
                 multiple = FALSE,
@@ -36,12 +36,22 @@ ui <- fluidPage(
                     label="Use example data",
                     value=TRUE),
       uiOutput("series2useUI"),
+      hr(),
+      h4("Output"),
+      numericInput(inputId = "tSec",
+                   label = "Length in Seconds",
+                   min = 1,
+                   max = 60,
+                   step=1,
+                   value = 5),
+      actionButton(inputId = "genWav", label = "Generate and Play"),
+      downloadButton("saveWav", "Save")
     ),
     mainPanel(
       tags$div(id = "AUDIO_MY"),
 
       h1("treeSong"),
-      p("This is treeSong, a shiny app for listening to tree-ring data. Using either a preloaded dataset or by uploading data, you can listen to to a time series in the frequency domain by converting a filtered spectral density function into a waveform in the range of human hearing. You can select the complexity of the waveform (the number of tones to include), the range of pitches following the a low A on a piano to the highest A (A0 to A8), and indicate how long the wave form should play. You can also download an audio file (wav). This app is in a super early stage."),
+      includeMarkdown("text_intro.rmd"),
       hr(),
       fluidRow(
         plotOutput("datPlotSeries")
@@ -80,22 +90,6 @@ ui <- fluidPage(
       fluidRow(
         column(12, align="center",
                plotOutput("datPlotSin")
-        )
-      ),
-      fluidRow(
-        numericInput(inputId = "tSec",
-                     label = "Length in Seconds",
-                     min = 1,
-                     max = 60,
-                     step=1,
-                     value = 5)
-      ),
-      fluidRow(
-        column(4,
-               actionButton(inputId = "genWav", label = "Generate and Play")
-        ),
-        column(2,
-               downloadButton("saveWav", "Save")
         )
       )
     )
