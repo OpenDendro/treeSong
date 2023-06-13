@@ -154,6 +154,17 @@ server <- function(input, output, session) {
       RVs$theSeries <- RVs$theData %>% pull(input$series2use)
     }
   })
+
+  getSpec <- reactive({
+    req(getSeries())
+    tmp <- data.frame(x=RVs$timeVec,y=RVs$theSeries)
+    tmp <- tmp %>% drop_na()
+
+    seriesSpec <- spec.pgram(tmp[,2], taper=0, plot=FALSE)
+    seriesSpec <- data.frame(x=seriesSpec$freq,y=seriesSpec$spec)
+    # make a RV
+    RVs$seriesSpec <- seriesSpec
+  })
   ## Uncheck demo data if file is uploaded
 
   observeEvent(input$file1,{
@@ -176,13 +187,10 @@ server <- function(input, output, session) {
   output$datPlotTimeSeries <- renderPlot({
     req(getData())
     req(getSeries())
+
     tmp <- data.frame(x=RVs$timeVec,y=RVs$theSeries)
     tmp <- tmp %>% drop_na()
-    # do spec here so we have it later. should just make a reactive
-    seriesSpec <- spec.pgram(tmp[,2], taper=0, plot=FALSE)
-    seriesSpec <- data.frame(x=seriesSpec$freq,y=seriesSpec$spec)
-    # make a RV so we can use it in another plot
-    RVs$seriesSpec <- seriesSpec
+
     pTS <- ggplot(tmp,aes(x,y)) +
       geom_line(color="grey80") +
       labs(x="",y="") +
@@ -191,12 +199,10 @@ server <- function(input, output, session) {
   },bg="transparent")
 
   output$datPlotSpec <- renderPlot({
-    req(getData())
-    req(getSeries())
+    req(getSpec())
     seriesSpec <- RVs$seriesSpec
     specThresh <- seriesSpec$y[order(seriesSpec$y,decreasing = TRUE)[input$m+1]]
     seriesSpec$keepers <- ifelse(seriesSpec$y>specThresh,TRUE,FALSE)
-    # make these the colors in the sin wav as segs instead of blue, make light blue grey
     seriesSpec0 <- seriesSpec %>% filter(keepers == FALSE)
     seriesSpec1 <- seriesSpec %>% filter(keepers == TRUE)
     seriesSpec1$idx <- paste0(1:nrow(seriesSpec1),"Hz")
@@ -233,8 +239,8 @@ server <- function(input, output, session) {
   },bg="transparent")
 
   output$datPlotSin <- renderPlot({
+    req(getSpec())
     seriesSpec <- RVs$seriesSpec
-    # plot three - sine waves
     minObsFreq <- min(seriesSpec$x)
     maxObsFreq  <- max(seriesSpec$y)
     minScaledFreq <- input$freqRange[1]
@@ -246,8 +252,7 @@ server <- function(input, output, session) {
     # get m biggest peaks
     indicies <- order(seriesSpec$y,decreasing = TRUE)[1:input$m]
 
-    # make into wave -- vectorize this?
-    # do low first
+    # make into wave
     idm <- indicies[1]
     tm <- seq(0,1/xScaled[idm], length.out = 44100/xScaled[idm])
     outSine <- matrix(0,ncol = input$m, nrow=length(tm))
