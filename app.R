@@ -2,8 +2,11 @@ library(shiny)
 library(shinyWidgets)
 library(tidyverse)
 library(tuneR)
-require(cowplot)
+library(cowplot)
+library(markdown)
 library(shinythemes)
+library(shinyjs)
+
 source("series2sound.R")
 
 # load data
@@ -11,19 +14,22 @@ demoDat <- read_csv("demoData.csv")
 demoDat <- demoDat %>%
   pivot_wider(names_from = Site, values_from = Growth)
 
-octaves <- 27.5*2^(0:8)
+octaves <- 27.5*2^(0:7)
 
 addResourcePath("www", "www")
 
 
 ui <- fluidPage(
+  useShinyjs(),
   theme = shinytheme("superhero"),
   sidebarLayout(
     # Sidebar panel for inputs
     sidebarPanel(
+      style = "position:fixed;width:22%;height:95%;overflow-y:auto;",
+      # TOOL TIP?
       includeMarkdown("text_upload.rmd"),
       hr(),
-      p("CSV File"),
+      p("Upload Data"),
       fileInput(inputId="file1",
                 label=NULL,
                 multiple = FALSE,
@@ -38,59 +44,65 @@ ui <- fluidPage(
       uiOutput("series2useUI"),
       hr(),
       h4("Output"),
-      numericInput(inputId = "tSec",
-                   label = "Length in Seconds",
-                   min = 1,
-                   max = 60,
-                   step=1,
-                   value = 5),
       actionButton(inputId = "genWav", label = "Generate and Play"),
-      downloadButton("saveWav", "Save")
+      downloadButton("saveWav", "Save"),
+      # minScaledFreq - lowest kept frequency in Hz
+      # maxScaledFreq - highest kept frequency in Hz
+      sliderTextInput(inputId = "freqRange",
+                      label = "Output Freq Range (Hz)",
+                      choices = octaves,
+                      selected = octaves[c(4,7)]),
+      sliderTextInput(inputId = "tSec",
+                      label = "Length in Seconds",
+                      choices = seq(5,60,by=5),
+                      selected = 5)
     ),
     mainPanel(
+      #width = 9,
       tags$div(id = "AUDIO_MY"),
 
       h1("treeSong"),
       includeMarkdown("text_intro.rmd"),
       hr(),
       fluidRow(
-        plotOutput("datPlotSeries")
-      ),
-      fluidRow(
-        column(2,
-               checkboxInput(inputId = "logx",label = "Log x",value = FALSE)
-        ),
-        column(2,
-               checkboxInput(inputId = "logy",label = "Log y",value = TRUE)
-        )
+        plotOutput("datPlotTimeSeries")
       ),
       hr(),
       fluidRow(
-        # m=10 - number of "notes"
-        column(6,
-               sliderInput(inputId = "m", label = "Complexity Threshold",
-                           min = 1,max = 50,value = 10)
-        ),
-        # minScaledFreq - lowest kept frequency in Hz
-        # maxScaledFreq - highest kept frequency in Hz
-        column(6,
-               # sliderInput(inputId = "freqRange",
-               #             label = "Output Freq Range (Hz)",
-               #             min = 55, max = 6600,
-               #             value = c(220,1760),
-               #             step = 110)
-               sliderTextInput(inputId = "freqRange",
-                               label = "Output Freq Range (Hz)",
-                               choices = octaves,
-                               selected = octaves[c(4,7)])
+        column(12,align="center",
 
+               # m=10 - number of "notes"
+               sliderTextInput(inputId = "m",
+                               label = "Complexity",
+                               choices = seq(1,50,by=1),
+                               selected = 10,
+                               hide_min_max = TRUE)
         )
       ),
-      hr(),
       fluidRow(
         column(12, align="center",
                plotOutput("datPlotSin")
+        ),
+        hr(),
+        materialSwitch(inputId = "showSpec", label = "Show spectrum", value = FALSE, status = "primary"),
+        # start toggle
+        conditionalPanel(
+          condition = "input.showSpec",
+        fluidRow(
+          column(12,
+                 plotOutput("datPlotSpec")
+          )
+        ),
+        fluidRow(
+          column(2),
+          column(2,
+                 checkboxInput(inputId = "logx",label = "Log x",value = FALSE)
+          ),
+          column(2,
+                 checkboxInput(inputId = "logy",label = "Log y",value = TRUE)
+          )
         )
+        )# end toggle
       )
     )
   )
@@ -161,58 +173,54 @@ server <- function(input, output, session) {
                 selected = RVs$theNames[2])
   })
 
-
-  output$datPlotSeries <- renderPlot({
+  output$datPlotTimeSeries <- renderPlot({
     req(getData())
     req(getSeries())
     tmp <- data.frame(x=RVs$timeVec,y=RVs$theSeries)
     tmp <- tmp %>% drop_na()
+    # do spec here so we have it later. should just make a reactive
     seriesSpec <- spec.pgram(tmp[,2], taper=0, plot=FALSE)
     seriesSpec <- data.frame(x=seriesSpec$freq,y=seriesSpec$spec)
     # make a RV so we can use it in another plot
     RVs$seriesSpec <- seriesSpec
+    pTS <- ggplot(tmp,aes(x,y)) +
+      geom_line(color="grey80") +
+      labs(x="",y="") +
+      theme_void()
+    return(pTS)
+  },bg="transparent")
+
+  output$datPlotSpec <- renderPlot({
+    req(getData())
+    req(getSeries())
+    seriesSpec <- RVs$seriesSpec
     specThresh <- seriesSpec$y[order(seriesSpec$y,decreasing = TRUE)[input$m+1]]
     seriesSpec$keepers <- ifelse(seriesSpec$y>specThresh,TRUE,FALSE)
     # make these the colors in the sin wav as segs instead of blue, make light blue grey
     seriesSpec0 <- seriesSpec %>% filter(keepers == FALSE)
     seriesSpec1 <- seriesSpec %>% filter(keepers == TRUE)
     seriesSpec1$idx <- paste0(1:nrow(seriesSpec1),"Hz")
-    # plot one -- TS
-    pTS <- ggplot(tmp,aes(x,y)) +
-      geom_line(color="grey80") +
-      labs(x="",y="") +
-      theme_cowplot()
 
-    # plot two - periodogram -- old
-    pSpecOld <- ggplot(seriesSpec,aes(x,xend=x,y=y,yend=0,color=keepers)) +
-      geom_segment() +
-      geom_hline(yintercept = specThresh,linetype="dashed",color="blue") +
-      annotate("text",
-               x = Inf, #mean(seriesSpec$x),
-               y = specThresh,
-               label = "Complexity Threshold",
-               family="serif",
-               vjust = -0.5, hjust = 1, color="blue") +
-      scale_color_manual(values=c("lightblue","blue")) +
-      labs(x="Frequency",y="Spectral Density") +
-      theme_cowplot() +
-      theme(legend.position = "none")
-
-    # plot two - periodogram -- change
+    # plot - periodogram
     pSpec <- ggplot() +
       geom_segment(data=seriesSpec0,aes(x,xend=x,y=y,yend=0),
-                   color="grey50",alpha=0.1) +
-      geom_hline(yintercept = specThresh,linetype="dashed",color="blue") +
+                   color="grey80") +
+      geom_hline(yintercept = specThresh,linetype="dashed",color="white") +
       geom_segment(data=seriesSpec1,aes(x,xend=x,y=y,yend=0,color=idx),size=1) +
       annotate("text",
                x = Inf, #mean(seriesSpec$x),
                y = specThresh,
                label = "Complexity Threshold",
                family="serif",
-               vjust = -0.5, hjust = 1, color="blue") +
+               vjust = -0.5, hjust = 1, color="white") +
       labs(x="Frequency",y="Spectral Density") +
       theme_cowplot() +
-      theme(legend.position = "none")
+      theme(legend.position = "none",
+            axis.title = element_text(color = "white"),
+            axis.text = element_text(color = "white"),
+            axis.ticks = element_line(color = "white"),
+            axis.line = element_line(color = "white"))
+
 
     if(input$logx){
       pSpec <- pSpec + scale_x_continuous(trans="log")
@@ -221,13 +229,8 @@ server <- function(input, output, session) {
       pSpec <- pSpec + scale_y_continuous(trans="log")
     }
 
-
-    pComb <- plot_grid(
-      pTS, pSpec,
-      ncol = 1
-    )
-    return(pComb)
-  })
+    return(pSpec)
+  },bg="transparent")
 
   output$datPlotSin <- renderPlot({
     seriesSpec <- RVs$seriesSpec
@@ -257,19 +260,16 @@ server <- function(input, output, session) {
     sins2plot <- as_tibble(outSine) %>% add_column(tm) %>%
       pivot_longer(-tm)
 
-    pSin <- ggplot(sins2plot,aes(x=tm,y=value,color=name)) +
-      geom_hline(yintercept = 0) +
-      geom_line() +
-      theme_cowplot() +
-      labs(x="Time (sec)",y="Amplitude",
-           subtitle = "Out Sound") +
-      theme(legend.position = "none",
-            #axis.title.y=element_blank(),
-            axis.text.y=element_blank(),
-            axis.ticks.y=element_blank())
+    pSin <- ggplot(sins2plot) +
+      geom_hline(yintercept = 0,color="white") +
+      geom_line(aes(x=tm,y=value,color=name)) +
+      geom_ribbon(aes(x=tm,ymax=value,ymin=0,fill=name),alpha=0.2) +
+      scale_x_continuous(expand=c(0,0)) +
+      theme_void() +
+      theme(legend.position = "none")
 
-    pSin
-  })
+    return(pSin)
+  },bg="transparent")
 
   observeEvent(input$genWav, {
     theWave <- series2sound(series = RVs$theSeries,

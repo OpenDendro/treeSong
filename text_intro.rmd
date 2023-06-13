@@ -1,13 +1,12 @@
 ## Introduction
 Introducing **treeSong**, an interactive and user-friendly Shiny application designed for sonifying tree-ring data. Whether you choose to work with a preloaded dataset or upload your own data, treeSong enables you to transform a time series into an auditory experience in the frequency domain. By converting a filtered spectral density function into a waveform within the audible range for humans, you can immerse yourself in the unique soundscape of your data.
 
-With treeSong, you have full control over customizing your listening experience. You can adjust the complexity of the waveform by selecting the number of tones to include, allowing you to explore different levels of intricacy in your audio representation. Furthermore, you have the freedom to specify the pitch range, spanning from a low A on a piano to the highest A (A0 to A8), offering a wide spectrum of tonal possibilities. Additionally, you can determine the duration of the waveform, dictating how long the audio will play.
+With treeSong, you can adjust the complexity of the waveform by selecting the number of tones to include, allowing you to explore different levels of intricacy in your audio representation. Furthermore, you can specify the pitch range, spanning from a low A on a piano to the highest A (A0 to A7), offering a wide spectrum of tonal possibilities. Additionally, you can determine the duration of the waveform, dictating how long the audio will play.
 
-For convenience and sharing, treeSong also provides the option to download the generated audio as a high-quality WAV file, ensuring compatibility with various audio players and editors.
+For convenience and sharing, treeSong also provides the option to download the generated audio as a high-quality WAV file for compatibility with various audio players and editors.
 
-Immerse yourself in the hidden melodies of tree-ring data with treeSong, and uncover the auditory patterns that lie within the natural world.
+Immerse yourself in the hidden melodies of tree-ring data with treeSong, and uncover the auditory patterns that lie within the natural world!
 
-This is very much a beta app!
 
 
 
