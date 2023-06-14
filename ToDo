@@ -1,5 +1,3 @@
 Make circle plot
-Recale freqs on spec plot to match input range
 Make evolutive
-Tool tips
-
+Get rid of value text in complexity (renderUI makes it a PITA)

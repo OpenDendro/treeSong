@@ -6,14 +6,10 @@ library(cowplot)
 library(markdown)
 library(shinythemes)
 library(shinyjs)
-
-source("series2sound.R")
+library(shinyalert)
 
 # load data
-demoDat <- read_csv("demoData.csv")
-demoDat <- demoDat %>%
-  pivot_wider(names_from = Site, values_from = Growth)
-
+demoDat <- read_csv("demoDatWide.csv")
 octaves <- 27.5*2^(0:7)
 
 addResourcePath("www", "www")
@@ -22,72 +18,90 @@ addResourcePath("www", "www")
 ui <- fluidPage(
   useShinyjs(),
   theme = shinytheme("superhero"),
+  tags$div(id = "AUDIO_MY"),
+
   sidebarLayout(
     # Sidebar panel for inputs
     sidebarPanel(
-      style = "position:fixed;width:22%;height:95%;overflow-y:auto;",
-      # TOOL TIP?
-      includeMarkdown("text_upload.rmd"),
-      hr(),
-      p("Upload Data"),
+      #style = "position:fixed;width:22%;height:95%;overflow-y:auto;",
+      width=3,
+      h4("Input"),
       fileInput(inputId="file1",
                 label=NULL,
                 multiple = FALSE,
                 accept = c("text/plain",
-                           ".rwl",
-                           ".raw",
                            ".csv",
-                           ".txt")),
+                           ".txt"),
+                buttonLabel = "Browse",
+                placeholder = "Choose File"),
+      actionButton(inputId = "uploadHelp", label = "Upoad Data",
+                   icon=icon("upload")),
       checkboxInput(inputId="useDemoData",
-                    label="Use example data",
+                    label="Or use example data",
                     value=TRUE),
       uiOutput("series2useUI"),
       hr(),
       h4("Output"),
-      actionButton(inputId = "genWav", label = "Generate and Play"),
-      downloadButton("saveWav", "Save"),
+      fluidRow(
+        column(6,actionButton(inputId = "genWav", label = "Play",
+                              icon=icon("play"))
+        ),
+        column(6,
+               downloadButton("saveWav", "Save")
+        ),
+        sliderTextInput(inputId = "tSec",
+                        label = "Length in Seconds",
+                        choices = seq(5,60,by=5),
+                        selected = 5,
+                        hide_min_max = TRUE)
+      ),
+      hr(),
+      h4("Control"),
+      fluidRow(
+        uiOutput("mUI"),
+        # doesn't work with the dynamic UI
+        #          tags$script(HTML("
+        #   $(document).ready(function() {setTimeout(function() {
+        #     supElement = document.getElementById('mUI').parentElement;
+        #     $(supElement).find('span.irs-max, span.irs-min, span.irs-single, span.irs-from, span.irs-to').remove();
+        #   }, 50);})
+        # "))
+      ),
+
       # minScaledFreq - lowest kept frequency in Hz
       # maxScaledFreq - highest kept frequency in Hz
       sliderTextInput(inputId = "freqRange",
                       label = "Output Freq Range (Hz)",
                       choices = octaves,
-                      selected = octaves[c(4,7)]),
-      sliderTextInput(inputId = "tSec",
-                      label = "Length in Seconds",
-                      choices = seq(5,60,by=5),
-                      selected = 5)
+                      selected = octaves[c(4,7)],
+                      hide_min_max = TRUE),
+
+
+      materialSwitch(inputId = "showSpec",
+                     label = "Show spectrum",
+                     value = FALSE, status = "primary")
     ),
     mainPanel(
-      #width = 9,
-      tags$div(id = "AUDIO_MY"),
-
+      width = 9,
       h1("treeSong"),
-      includeMarkdown("text_intro.rmd"),
+      actionButton(inputId = "about", label = "About",
+                   icon = icon("circle-info")),
       hr(),
       fluidRow(
-        plotOutput("datPlotTimeSeries")
+        plotOutput("datPlotTimeSeries",height = "200px") # height?
       ),
       hr(),
-      fluidRow(
-        column(12,align="center",
-
-               # m=10 - number of "notes"
-               sliderTextInput(inputId = "m",
-                               label = "Complexity",
-                               choices = seq(1,50,by=1),
-                               selected = 10,
-                               hide_min_max = TRUE)
+      conditionalPanel(
+        condition = "!input.showSpec",
+        fluidRow(
+          column(12, align="center",
+                 plotOutput("datPlotSin")
+          )
         )
       ),
-      fluidRow(
-        column(12, align="center",
-               plotOutput("datPlotSin")
-        ),
-        hr(),
-        materialSwitch(inputId = "showSpec", label = "Show spectrum", value = FALSE, status = "primary"),
-        # start toggle
-        conditionalPanel(
-          condition = "input.showSpec",
+      # start toggle
+      conditionalPanel(
+        condition = "input.showSpec",
         fluidRow(
           column(12,
                  plotOutput("datPlotSpec")
@@ -96,14 +110,13 @@ ui <- fluidPage(
         fluidRow(
           column(2),
           column(2,
-                 checkboxInput(inputId = "logx",label = "Log x",value = FALSE)
+                 checkboxInput(inputId = "logx",label = "Log x",value = TRUE)
           ),
           column(2,
                  checkboxInput(inputId = "logy",label = "Log y",value = TRUE)
           )
         )
-        )# end toggle
-      )
+      )# end toggle
     )
   )
 )
@@ -126,8 +139,6 @@ server <- function(input, output, session) {
     if (input$useDemoData) {
       dat <- demoDat
       RVs$theData <- dat
-      RVs$timeVec <- dat[,1] %>% pull()
-      dat <- dat[,-1]
       RVs$nSeries <- ncol(dat)
       RVs$theNames <- names(dat)
       return(dat)
@@ -139,8 +150,6 @@ server <- function(input, output, session) {
     else{
       dat <- read_csv(inFile$datapath)
       RVs$theData <- dat
-      RVs$timeVec <- dat[,1] %>% pull()
-      dat <- dat[,-1]
       RVs$nSeries <- ncol(dat)
       RVs$theNames <- names(dat)
       return(dat)
@@ -157,16 +166,26 @@ server <- function(input, output, session) {
 
   getSpec <- reactive({
     req(getSeries())
-    tmp <- data.frame(x=RVs$timeVec,y=RVs$theSeries)
-    tmp <- tmp %>% drop_na()
+    tmp <- data.frame(y=RVs$theSeries) %>% drop_na()
 
-    seriesSpec <- spec.pgram(tmp[,2], taper=0, plot=FALSE)
+    seriesSpec <- spec.pgram(tmp[,1], taper=0, plot=FALSE)
     seriesSpec <- data.frame(x=seriesSpec$freq,y=seriesSpec$spec)
+    # add rescaled freqs here. no reason not to
+    minObsFreq <- min(seriesSpec$x)
+    maxObsFreq  <- max(seriesSpec$x)
+    minScaledFreq <- input$freqRange[1]
+    maxScaledFreq <- input$freqRange[2]
+
+    # scale from 0 to 1
+    tmp <- (seriesSpec$x - minObsFreq) / (maxObsFreq - minObsFreq)
+
+    seriesSpec$xScaled <-  tmp * (maxScaledFreq - minScaledFreq) + minScaledFreq
+
     # make a RV
     RVs$seriesSpec <- seriesSpec
   })
-  ## Uncheck demo data if file is uploaded
 
+  ## Uncheck demo data if file is uploaded
   observeEvent(input$file1,{
     updateCheckboxInput(session,"useDemoData",value=FALSE)
   }, ignoreInit = TRUE)
@@ -179,21 +198,35 @@ server <- function(input, output, session) {
 
   output$series2useUI <- renderUI({
     req(getData())
-    selectInput(inputId = "series2use", label = "Select Series",
+    selectInput(inputId = "series2use", label = "Series",
                 choices = RVs$theNames,
-                selected = RVs$theNames[2])
+                selected = RVs$theNames[1])
+  })
+
+
+  output$mUI <- renderUI({
+    req(getSpec())
+    # get up to 1/10th of total possible freqs
+    maxFreqs <- floor(length(RVs$seriesSpec$x)/10)
+    sliderTextInput(inputId = "m",
+                    label = "Complexity",
+                    choices = seq(1,maxFreqs,by=1),
+                    selected = 10,
+                    hide_min_max = TRUE,
+                    grid = FALSE)
   })
 
   output$datPlotTimeSeries <- renderPlot({
     req(getData())
     req(getSeries())
 
-    tmp <- data.frame(x=RVs$timeVec,y=RVs$theSeries)
+    tmp <- data.frame(x=1:(length(RVs$theSeries)),
+                      y=RVs$theSeries)
     tmp <- tmp %>% drop_na()
 
     pTS <- ggplot(tmp,aes(x,y)) +
       geom_line(color="grey80") +
-      labs(x="",y="") +
+      scale_x_continuous(expand=c(0,0)) +
       theme_void()
     return(pTS)
   },bg="transparent")
@@ -209,23 +242,27 @@ server <- function(input, output, session) {
 
     # plot - periodogram
     pSpec <- ggplot() +
-      geom_segment(data=seriesSpec0,aes(x,xend=x,y=y,yend=0),
+      geom_segment(data=seriesSpec0,aes(xScaled,xend=xScaled,
+                                        y=y,yend=0),
                    color="grey80") +
       geom_hline(yintercept = specThresh,linetype="dashed",color="white") +
-      geom_segment(data=seriesSpec1,aes(x,xend=x,y=y,yend=0,color=idx),size=1) +
+      geom_segment(data=seriesSpec1,aes(xScaled,xend=xScaled,
+                                        y=y,yend=0,color=idx),size=1) +
       annotate("text",
                x = Inf, #mean(seriesSpec$x),
                y = specThresh,
                label = "Complexity Threshold",
                family="serif",
                vjust = -0.5, hjust = 1, color="white") +
-      labs(x="Frequency",y="Spectral Density") +
+      labs(x="Frequency (Hz)",y="Amplitude") +
       theme_cowplot() +
       theme(legend.position = "none",
             axis.title = element_text(color = "white"),
-            axis.text = element_text(color = "white"),
-            axis.ticks = element_line(color = "white"),
-            axis.line = element_line(color = "white"))
+            axis.line = element_line(color = "white"),
+            axis.text.x = element_text(color = "white"),
+            axis.ticks.x = element_line(color = "white"),
+            axis.text = element_blank(),
+            axis.ticks = element_blank())
 
 
     if(input$logx){
@@ -240,28 +277,23 @@ server <- function(input, output, session) {
 
   output$datPlotSin <- renderPlot({
     req(getSpec())
+    req(input$m)
     seriesSpec <- RVs$seriesSpec
-    minObsFreq <- min(seriesSpec$x)
-    maxObsFreq  <- max(seriesSpec$y)
-    minScaledFreq <- input$freqRange[1]
-    maxScaledFreq <- input$freqRange[2]
-    xScaled <- (seriesSpec$x - minObsFreq) /
-      (maxObsFreq - minObsFreq) *
-      (maxScaledFreq - minScaledFreq) + minScaledFreq
 
-    # get m biggest peaks
+    # get m biggest peak
     indicies <- order(seriesSpec$y,decreasing = TRUE)[1:input$m]
 
     # make into wave
     idm <- indicies[1]
-    tm <- seq(0,1/xScaled[idm], length.out = 44100/xScaled[idm])
+    tm <- seq(0,1/seriesSpec$xScaled[idm],
+              length.out = 44100/seriesSpec$xScaled[idm])
     outSine <- matrix(0,ncol = input$m, nrow=length(tm))
 
     for(i in 1:input$m){
       idm <- indicies[i]
-      outSine[,i] <-  seriesSpec$y[idm]*sin(2*pi*xScaled[idm]*tm)
+      outSine[,i] <-  seriesSpec$y[idm]*sin(2*pi*seriesSpec$xScaled[idm]*tm)
     }
-    colnames(outSine) <- paste0(round(xScaled[indicies],3),"Hz")
+    colnames(outSine) <- paste0(round(seriesSpec$xScaled[indicies],3),"Hz")
     sins2plot <- as_tibble(outSine) %>% add_column(tm) %>%
       pivot_longer(-tm)
 
@@ -277,11 +309,28 @@ server <- function(input, output, session) {
   },bg="transparent")
 
   observeEvent(input$genWav, {
-    theWave <- series2sound(series = RVs$theSeries,
-                            m=input$m,
-                            minScaledFreq = input$freqRange[1],
-                            maxScaledFreq = input$freqRange[2],
-                            wavLength = input$tSec)
+    req(getSpec())
+    req(input$m)
+    req(input$tSec)
+    sampRate <- 4.41e4 # 44.1 kHz is std samp rate.
+    seriesSpec <- RVs$seriesSpec
+    xScaled <- seriesSpec$xScaled
+    y <- seriesSpec$y
+    # get m biggest peaks
+    indicies <- order(y,decreasing = TRUE)[1:input$m]
+
+    # make into wave -- vectorize this?
+    tVec <- seq(from = 0, to = input$tSec, by = sampRate^-1)
+    theWave <- rep(0,nrow = length(tVec))
+    for(i in 1:input$m){
+      idm <- indicies[i]
+      theWave <- theWave + y[idm]*sin(2*pi*xScaled[idm]*tVec)
+    }
+
+    theWave <- Wave(left = theWave, right= theWave,
+                    samp.rate = sampRate, bit=16)
+    theWave <- normalize(object = theWave, unit = "16") # 16 bit
+
     RVs$theWave <- theWave
     writeWave(theWave, filename="www/out.wav", extensible = TRUE)
     insertUI(selector = "#AUDIO_MY",
@@ -291,6 +340,7 @@ server <- function(input, output, session) {
                              style="display:none;"),
              immediate = TRUE)
   })
+
   output$saveWav <- downloadHandler(
     filename = function() {
       paste("out", "wav", sep=".")
@@ -299,6 +349,23 @@ server <- function(input, output, session) {
       writeWave(RVs$theWave, filename=file, extensible = TRUE)
     }
   )
+
+
+  observeEvent(input$uploadHelp, {
+    showModal(modalDialog(
+      title = "Format",
+      includeMarkdown("text_upload.rmd"),
+      easyClose = TRUE
+    ))
+  })
+
+  observeEvent(input$about, {
+    showModal(modalDialog(
+      title = "treeSong",
+      includeMarkdown("text_intro.rmd"),
+      easyClose = TRUE
+    ))
+  })
 }
 
 shinyApp(ui, server)

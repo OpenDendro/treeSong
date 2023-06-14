@@ -1,2 +1,2 @@
 # treeSong
-Sonifying tree-ring data 
+This is an app in development to sonifying tree-ring data. 
