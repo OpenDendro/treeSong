@@ -1,3 +1,6 @@
-Make circle plot
+Make circle plot like tree rings? Have to off set
 Make evolutive
 Get rid of value text in complexity (renderUI makes it a PITA)
+make notes and export midi. I think this means writing actual music. Look the https://urswilke.github.io/pyramidi/ library.
+renderUI for osc plot so you can save
+Look at this anim: https://amarder.github.io/visualizing-sound/

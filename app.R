@@ -6,12 +6,19 @@ library(cowplot)
 library(markdown)
 library(shinythemes)
 library(shinyjs)
-library(shinyalert)
+library(shinyBS)
+library(scales)
+library(gganimate)
+library(transformr)
+library(gifski)
+library(av)
+source("theme_oscilloscope.R")
 
 # load data
 demoDat <- read_csv("demoDatWide.csv")
 octaves <- 27.5*2^(0:7)
-
+sampRateAudio <- 4.41e4
+sampRatePlot <- sampRateAudio/2
 addResourcePath("www", "www")
 
 
@@ -19,6 +26,24 @@ ui <- fluidPage(
   useShinyjs(),
   theme = shinytheme("superhero"),
   tags$div(id = "AUDIO_MY"),
+  # css to change the
+  tags$head(
+    tags$style(
+      HTML(".shiny-notification {
+           height: 100px;
+           width: 200px;
+           position:fixed;
+           top: calc(50% - 300px);
+           left: calc(50% - 100px);
+           text-align: center;
+           }
+           #oscModal .modal-footer { display:none }
+           #oscModal .modal-sm { width: 250px;}
+           #oscModal { height: 260px;}"
+      )
+    )
+  ),
+
 
   sidebarLayout(
     # Sidebar panel for inputs
@@ -26,6 +51,9 @@ ui <- fluidPage(
       #style = "position:fixed;width:22%;height:95%;overflow-y:auto;",
       width=3,
       h4("Input"),
+      actionButton(inputId = "uploadHelp", label = "Upload Format",
+                   icon=icon("circle-info")),
+
       fileInput(inputId="file1",
                 label=NULL,
                 multiple = FALSE,
@@ -34,21 +62,34 @@ ui <- fluidPage(
                            ".txt"),
                 buttonLabel = "Browse",
                 placeholder = "Choose File"),
-      actionButton(inputId = "uploadHelp", label = "Upoad Data",
-                   icon=icon("upload")),
+
       checkboxInput(inputId="useDemoData",
                     label="Or use example data",
                     value=TRUE),
       uiOutput("series2useUI"),
       hr(),
       h4("Output"),
+      hr(),
+      h5("Audio"),
       fluidRow(
         column(6,actionButton(inputId = "genWav", label = "Play",
                               icon=icon("play"))
         ),
         column(6,
                downloadButton("saveWav", "Save")
-        ),
+        )
+      ),
+      hr(),
+      h5("Animate"),
+      fluidRow(
+
+               actionButton(inputId = "oscAnimModal",
+                            label = "Oscilloscope",
+                            icon=icon("play"))
+
+      ),
+      hr(),
+      fluidRow(
         sliderTextInput(inputId = "tSec",
                         label = "Length in Seconds",
                         choices = seq(5,60,by=5),
@@ -90,6 +131,7 @@ ui <- fluidPage(
       fluidRow(
         plotOutput("datPlotTimeSeries",height = "200px") # height?
       ),
+
       hr(),
       conditionalPanel(
         condition = "!input.showSpec",
@@ -116,14 +158,38 @@ ui <- fluidPage(
                  checkboxInput(inputId = "logy",label = "Log y",value = TRUE)
           )
         )
-      )# end toggle
-    )
+      ),# end toggle
+
+      # do the modals
+      bsModal(id = "aboutModal",
+              title = "About treeSong",
+              trigger = "about",
+              size = "medium",
+              includeMarkdown("text_intro.rmd")),
+
+      bsModal(id = "uploadModal",
+              title = "File Format",
+              trigger = "uploadHelp",
+              size = "medium",
+              includeMarkdown("text_upload.rmd")),
+
+
+
+      bsModal(id = "oscModal",
+              #title = "Data Table",
+              trigger = "oscAnimModal",
+              size = "small",
+              imageOutput("datPlotOsc"))
+    ) # end main panel
   )
 )
 
 
 
 server <- function(input, output, session) {
+
+
+
   RVs <- reactiveValues()
 
   ##############################################################
@@ -286,7 +352,7 @@ server <- function(input, output, session) {
     # make into wave
     idm <- indicies[1]
     tm <- seq(0,1/seriesSpec$xScaled[idm],
-              length.out = 44100/seriesSpec$xScaled[idm])
+              length.out = sampRatePlot/seriesSpec$xScaled[idm])
     outSine <- matrix(0,ncol = input$m, nrow=length(tm))
 
     for(i in 1:input$m){
@@ -308,11 +374,99 @@ server <- function(input, output, session) {
     return(pSin)
   },bg="transparent")
 
+
+  output$datPlotOsc <- renderImage({
+    req(getSpec())
+    req(input$m)
+    seriesSpec <- RVs$seriesSpec
+
+
+
+    # get m biggest peak
+    indicies <- order(seriesSpec$y,decreasing = TRUE)[1:input$m]
+
+    # make into wave
+    idm <- indicies[1]
+    tm <- seq(from = 0, to = input$tSec, by = 1/sampRatePlot)
+    ###
+    f1 <- seriesSpec$xScaled[idm]
+    maxCycleIdx <- ceiling((1/f1) * (sampRatePlot) + 1)
+    nCycles <- ceiling(length(tm)/maxCycleIdx)
+    cycleIdx <- rep(1:maxCycleIdx,each=maxCycleIdx)[1:length(tm)]
+    tmCycle <- rep(tm[1:maxCycleIdx],times=nCycles)[1:length(tm)]
+    ###
+    outSine <- matrix(0,ncol = input$m, nrow=length(tm))
+
+    for(i in 1:input$m){
+      idm <- indicies[i]
+      outSine[,i] <-  seriesSpec$y[idm]*sin(2*pi*seriesSpec$xScaled[idm]*tm)
+    }
+    colnames(outSine) <- paste0(round(seriesSpec$xScaled[indicies],3),"Hz")
+
+    sins2plot <- as_tibble(outSine) %>% add_column(tm,tmCycle,cycleIdx)
+    # trim to last complete cycle? so not jagged
+    sins2plot <- sins2plot %>%
+      filter(cycleIdx < nCycles) %>%
+      pivot_longer(-c(tm,cycleIdx,tmCycle)) %>%
+      mutate(valueS = scale(value)[,1]) %>%
+      rename(x=tmCycle,y=value) %>%
+      mutate(x=rescale(x, to=c(-1, 1)),
+             y=rescale(y, to=c(-0.9, 0.9)))
+
+    # make the plot bnd
+    bndBox <- data.frame(x=c(-Inf,-Inf,Inf,Inf, -Inf),
+                         y=c(-Inf,Inf,Inf,-Inf, -Inf),
+                         id="bnd")
+
+    # make the porthole mask
+    hole <- data.frame(
+      x = cos(seq(0, 2*pi, length.out = 360)),
+      y = sin(seq(0, 2*pi, length.out = 360)),
+      id="circle"
+    )
+
+    porthole <- rbind(bndBox,hole)
+
+    p <- ggplot(sins2plot,aes(x=x,y=y,color=name)) +
+      geom_line() + coord_fixed() +
+      geom_polygon(data=porthole,
+                   aes(x = x, y = y), fill = "black",
+                   inherit.aes = FALSE) +
+      geom_polygon(data=hole,
+                   aes(x = x, y = y), color = "grey90",fill=NA,
+                   inherit.aes = FALSE) +
+      theme_oscilloscope()
+
+    pAnim <- p +  transition_time(cycleIdx)
+
+
+    #    outfile <- tempfile(fileext='.gif')
+
+    anim_save("www/osc.gif",
+              withProgress({
+                animate(
+                  plot = pAnim,
+                  height = 200, width = 200, units = "px",
+                  nframes = 50,
+                  fps=10)
+              },message = 'Generating Animation')
+    )
+
+
+    list(src = "www/osc.gif",
+         contentType = 'image/gif',
+         width = 200,
+         height = 200,
+         alt = "Osc"
+    )
+  },deleteFile = FALSE)
+
+
   observeEvent(input$genWav, {
     req(getSpec())
     req(input$m)
     req(input$tSec)
-    sampRate <- 4.41e4 # 44.1 kHz is std samp rate.
+
     seriesSpec <- RVs$seriesSpec
     xScaled <- seriesSpec$xScaled
     y <- seriesSpec$y
@@ -320,7 +474,7 @@ server <- function(input, output, session) {
     indicies <- order(y,decreasing = TRUE)[1:input$m]
 
     # make into wave -- vectorize this?
-    tVec <- seq(from = 0, to = input$tSec, by = sampRate^-1)
+    tVec <- seq(from = 0, to = input$tSec, by = sampRateAudio^-1)
     theWave <- rep(0,nrow = length(tVec))
     for(i in 1:input$m){
       idm <- indicies[i]
@@ -328,7 +482,7 @@ server <- function(input, output, session) {
     }
 
     theWave <- Wave(left = theWave, right= theWave,
-                    samp.rate = sampRate, bit=16)
+                    samp.rate = sampRateAudio, bit=16)
     theWave <- normalize(object = theWave, unit = "16") # 16 bit
 
     RVs$theWave <- theWave
@@ -350,22 +504,16 @@ server <- function(input, output, session) {
     }
   )
 
+  output$saveGif <- downloadHandler(
+    filename = function() {
+      paste("oscilloscope", "gif", sep=".")
+    },
+    content = function(file) {
+      file.copy(from = "www/osc.gif",file,overwrite = TRUE)
+    }, contentType = "image/gif"
+  )
 
-  observeEvent(input$uploadHelp, {
-    showModal(modalDialog(
-      title = "Format",
-      includeMarkdown("text_upload.rmd"),
-      easyClose = TRUE
-    ))
-  })
 
-  observeEvent(input$about, {
-    showModal(modalDialog(
-      title = "treeSong",
-      includeMarkdown("text_intro.rmd"),
-      easyClose = TRUE
-    ))
-  })
 }
 
 shinyApp(ui, server)
