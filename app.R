@@ -12,23 +12,35 @@ library(gganimate)
 library(transformr)
 library(gifski)
 library(av)
+library(shinycssloaders)
+
 source("theme_oscilloscope.R")
 
 # load data
 demoDat <- read_csv("demoDatWide.csv")
 octaves <- 27.5*2^(0:7)
 sampRateAudio <- 4.41e4
-sampRatePlot <- sampRateAudio/2
-addResourcePath("www", "www")
+downSampRate <- 2
 
+addResourcePath(prefix = "www", directoryPath = "www")
+addResourcePath(prefix = "videos", directoryPath = "www")
 
 ui <- fluidPage(
+
+  ##############################################################
+  #
+  # Theme and style
+  #
+  ##############################################################
+
   useShinyjs(),
   theme = shinytheme("superhero"),
-  tags$div(id = "AUDIO_MY"),
-  # css to change the
+
   tags$head(
+    tags$div(id = "AUDIO_MY"),
     tags$style(
+      # css to change the position of the progress bar
+      # and then to modify  gifModal
       HTML(".shiny-notification {
            height: 100px;
            width: 200px;
@@ -37,22 +49,25 @@ ui <- fluidPage(
            left: calc(50% - 100px);
            text-align: center;
            }
-           #oscModal .modal-footer { display:none }
-           #oscModal .modal-sm { width: 250px;}
-           #oscModal { height: 260px;}"
+           #mp4Modal .modal-footer { display:none }
+           #mp4Modal .modal-sm { width: 440px; }"
       )
     )
   ),
 
+  ##############################################################
+  #
+  # Sidebar
+  #
+  ##############################################################
 
   sidebarLayout(
     # Sidebar panel for inputs
     sidebarPanel(
       #style = "position:fixed;width:22%;height:95%;overflow-y:auto;",
       width=3,
-      h4("Input"),
-      actionButton(inputId = "uploadHelp", label = "Upload Format",
-                   icon=icon("circle-info")),
+      div(style="display: inline-block;",tags$h4("Input")),
+      actionButton(inputId = "uploadHelp", label = NULL,icon=icon("circle-info"),style = "padding: 0"),
 
       fileInput(inputId="file1",
                 label=NULL,
@@ -72,28 +87,38 @@ ui <- fluidPage(
       hr(),
       h5("Audio"),
       fluidRow(
-        column(6,actionButton(inputId = "genWav", label = "Play",
-                              icon=icon("play"))
+        column(6,
+               actionButton(inputId = "genWavFile", label = "Play",
+                            icon=icon("play"))
         ),
         column(6,
-               downloadButton("saveWav", "Save")
+               hidden(downloadButton(outputId = "saveWav",
+                                     label = "Save",
+                                     icon=icon("file-audio")))
         )
       ),
       hr(),
-      h5("Animate"),
+      div(style="display: inline-block;",tags$h5("Animation")),
+      actionButton(inputId = "animHelp", label = NULL,icon=icon("circle-info"),style = "padding: 0"),
       fluidRow(
-
-               actionButton(inputId = "oscAnimModal",
-                            label = "Oscilloscope",
+        column(6,
+               actionButton(inputId = "genVideo",
+                            label = "Play",
                             icon=icon("play"))
+        ),
+        column(6,
+               hidden(downloadButton(outputId = "saveOsc",
+                                     label = "Save",
+                                     icon=icon("file-video")))
+        )
 
       ),
       hr(),
       fluidRow(
         sliderTextInput(inputId = "tSec",
                         label = "Length in Seconds",
-                        choices = seq(5,60,by=5),
-                        selected = 5,
+                        choices = seq(1,60,by=1),
+                        selected = 2,
                         hide_min_max = TRUE)
       ),
       hr(),
@@ -122,6 +147,13 @@ ui <- fluidPage(
                      label = "Show spectrum",
                      value = FALSE, status = "primary")
     ),
+
+    ##############################################################
+    #
+    # Main panel
+    #
+    ##############################################################
+
     mainPanel(
       width = 9,
       h1("treeSong"),
@@ -160,7 +192,14 @@ ui <- fluidPage(
         )
       ),# end toggle
 
-      # do the modals
+      ##############################################################
+      #
+      # Modals: Still in main panel even though some modals
+      #         are in sidepanel? I think this is where they
+      #         appear.
+      #
+      ##############################################################
+
       bsModal(id = "aboutModal",
               title = "About treeSong",
               trigger = "about",
@@ -173,22 +212,29 @@ ui <- fluidPage(
               size = "medium",
               includeMarkdown("text_upload.rmd")),
 
+      bsModal(id = "animAboutModal",
+              title = "About Animation",
+              trigger = "animHelp",
+              size = "medium",
+              p("Generating an animation takes some time. The complexity and length of the animation, as well as the processing power of the server can influence the duration")),
 
-
-      bsModal(id = "oscModal",
-              #title = "Data Table",
-              trigger = "oscAnimModal",
+      bsModal(id = "mp4Modal",
+              title="Oscilloscope",
+              trigger = "genVideo",
               size = "small",
-              imageOutput("datPlotOsc"))
+              shinycssloaders::withSpinner(uiOutput("playVideo")))
     ) # end main panel
   )
 )
 
 
+##############################################################
+#
+# Server
+#
+##############################################################
 
 server <- function(input, output, session) {
-
-
 
   RVs <- reactiveValues()
 
@@ -251,14 +297,191 @@ server <- function(input, output, session) {
     RVs$seriesSpec <- seriesSpec
   })
 
-  ## Uncheck demo data if file is uploaded
+
+  getWave <- reactive({
+    req(getSpec())
+    req(input$m) # this is from a renderUI so make sure it is here.
+    seriesSpec <- RVs$seriesSpec
+
+    tm <- seq(from = 0, to = input$tSec, by = 1/sampRateAudio)
+
+    # get m biggest peak
+    indicies <- order(seriesSpec$y,decreasing = TRUE)[1:input$m]
+    # make into wave
+    idm <- indicies[1]
+    sinMat <- matrix(0,ncol = input$m, nrow=length(tm))
+
+    for(i in 1:input$m){
+      idm <- indicies[i]
+      sinMat[,i] <-  seriesSpec$y[idm]*sin(2*pi*seriesSpec$xScaled[idm]*tm)
+    }
+    colnames(sinMat) <- paste0(round(seriesSpec$xScaled[indicies],3),"Hz")
+
+    # audio
+    theWave <- rowSums(sinMat)
+    theWave <- Wave(left = theWave, right= theWave,
+                    samp.rate = sampRateAudio, bit=16)
+    theWave <- normalize(object = theWave, unit = "16") # 16 bit
+
+    RVs$theWave <- theWave
+    writeWave(theWave, filename="www/out.wav", extensible = TRUE)
+
+    # get the all the sin waves for plotting
+    n <- length(tm)
+    idx <- 1:n
+    # the lowest freq
+    f1 <- seriesSpec$xScaled[indicies[1]]
+
+    # how many observations does it take to complete ONE cycle of f1
+    # between 201 and 202 1/f1 < tm[201] 1/f1 < tm[202]
+    # the number of obs it takes to complete one cycle of f1
+    nObs_per_f1_cycle <- 1/f1 * sampRateAudio
+
+    # how many times we will complete a f1 cycle
+    nTimes_f1_cycles <- n/nObs_per_f1_cycle
+
+    # idx cycle transition
+    idx_f1_cycle_switch <- nObs_per_f1_cycle * 1:nTimes_f1_cycles
+    cycleIdx <- findInterval(idx,idx_f1_cycle_switch) + 1
+
+    # we want these things in the df relating to time
+    # 1. the tm vector -- tm
+    # 2. the inidivual cycle: first, second, third to nTimes_f1_cycles
+    tmp <- data.frame(tm=tm,
+                      cycleIdx)
+    # 3. relative time in each cycle off by 1?
+    tmp <- tmp %>% group_by(cycleIdx) %>%
+      mutate(tmCycle = seq(1,n())) %>%
+      ungroup()
+
+    # merge with waves used for the audio
+    outSine <- tmp %>% bind_cols(as_tibble(sinMat))
+
+    RVs$outSine <- outSine
+
+  })
+
+  getVideo <- reactive({
+    # run spec and wav with current inputs, yes?
+    cat("yo\n")
+    req(getWave())
+
+    file.remove("www/osc.gif")
+    file.remove("www/osc.mp4")
+
+    outSine <- RVs$outSine
+    # downsample for speed
+    outSine <- outSine[seq(1,nrow(outSine),by=downSampRate),]
+
+    nCycles <- max(outSine$cycleIdx[is.finite(outSine$cycleIdx)],na.rm=TRUE)
+
+    sins2plot <- outSine %>%
+      pivot_longer(-c(tm,cycleIdx,tmCycle)) %>%
+      rename(x=tmCycle,y=value) %>%
+      mutate(x=rescale(x, to=c(-1, 1)),
+             y=rescale(y, to=c(-0.8, 0.8)))
+
+    # make the plot bnd
+    bndBox <- data.frame(x=c(-Inf,-Inf,Inf,Inf, -Inf),
+                         y=c(-Inf,Inf,Inf,-Inf, -Inf),
+                         id="bnd")
+
+    # make the porthole mask
+    hole <- data.frame(
+      x = cos(seq(0, 2*pi, length.out = 360)),
+      y = sin(seq(0, 2*pi, length.out = 360)),
+      id="circle"
+    )
+
+    porthole <- rbind(bndBox,hole)
+
+    # make plot
+    p <- ggplot(sins2plot,aes(x=x,y=y,color=name)) +
+      geom_line() + coord_fixed() +
+      geom_polygon(data=porthole,
+                   aes(x = x, y = y), fill = "black",
+                   inherit.aes = FALSE) +
+      geom_polygon(data=hole,
+                   aes(x = x, y = y), color = "grey90",fill=NA,
+                   inherit.aes = FALSE) +
+      theme_oscilloscope()
+
+    # add transition
+    pAnim <- p +  transition_time(cycleIdx)
+
+    # animate
+    # note progress enhancement requested. https://github.com/thomasp85/gganimate/pull/331
+    # but not in current gganimate pacakge so don't bother yet.
+
+    theAmin <- animate(
+      plot = pAnim,
+      fps = 10,
+      duration=input$tSec,
+      height = 400,
+      width = 400,
+      units = "px"
+    )
+
+
+    anim_save(filename = "www/osc.gif",animation = theAmin)
+
+    # then do mp
+    av_encode_video(
+      input = "www/osc.gif",
+      output = "www/osc.mp4",
+      framerate = 10,
+      vfilter = "null",
+      codec = NULL,
+      audio = "www/out.wav",
+      verbose = TRUE
+    )
+
+    # start_time <- Sys.time()
+    #
+    # end_time <- Sys.time()
+    # print(end_time - start_time)
+
+  })
+
+  ##############################################################
+  #
+  # Observations
+  #
+  ##############################################################
+
+
+  # Uncheck demo data if file is uploaded
   observeEvent(input$file1,{
     updateCheckboxInput(session,"useDemoData",value=FALSE)
   }, ignoreInit = TRUE)
 
+  # fetch audio and make a UI when button is pushed
+  observeEvent(input$genWavFile, {
+    getWave()
+
+    # show save button after the file is generated
+    # if somebody changes the complexity, for instance, this
+    # will be out of date though.
+
+    show("saveWav")
+
+    insertUI(selector = "#AUDIO_MY",
+             where = "afterEnd",
+             ui = tags$audio(src = "www/out.wav", type = "audio/wav",
+                             autoplay = NA, controls = NA,
+                             style="display:none;"), # can comment out to have player appear
+             # the ui is NOT displayed ATM
+             immediate = TRUE)
+  })
+
+  # don't show download buttons until wave and osc are made
+  observeEvent(input$genVideo, {
+    show("saveOsc")
+  })
+
   ##############################################################
   #
-  # Server logic for loading and describing the input data
+  # UIs
   #
   ##############################################################
 
@@ -277,10 +500,23 @@ server <- function(input, output, session) {
     sliderTextInput(inputId = "m",
                     label = "Complexity",
                     choices = seq(1,maxFreqs,by=1),
-                    selected = 10,
+                    selected = 5,
                     hide_min_max = TRUE,
                     grid = FALSE)
   })
+
+  output$playVideo <- renderUI({
+    req(getVideo())
+    tags$video(src = "www/osc.mp4", type = "video/mp4",
+               autoplay = TRUE, controls = TRUE)
+  })
+
+  ##############################################################
+  #
+  # Plots
+  #
+  ##############################################################
+
 
   output$datPlotTimeSeries <- renderPlot({
     req(getData())
@@ -313,7 +549,7 @@ server <- function(input, output, session) {
                    color="grey80") +
       geom_hline(yintercept = specThresh,linetype="dashed",color="white") +
       geom_segment(data=seriesSpec1,aes(xScaled,xend=xScaled,
-                                        y=y,yend=0,color=idx),size=1) +
+                                        y=y,yend=0,color=idx),linewidth=1) +
       annotate("text",
                x = Inf, #mean(seriesSpec$x),
                y = specThresh,
@@ -342,25 +578,14 @@ server <- function(input, output, session) {
   },bg="transparent")
 
   output$datPlotSin <- renderPlot({
-    req(getSpec())
-    req(input$m)
-    seriesSpec <- RVs$seriesSpec
+    req(getWave())
+    outSine <- RVs$outSine
+    # downsample for speed
+    outSine <- outSine[seq(1,nrow(outSine),by=downSampRate),]
 
-    # get m biggest peak
-    indicies <- order(seriesSpec$y,decreasing = TRUE)[1:input$m]
-
-    # make into wave
-    idm <- indicies[1]
-    tm <- seq(0,1/seriesSpec$xScaled[idm],
-              length.out = sampRatePlot/seriesSpec$xScaled[idm])
-    outSine <- matrix(0,ncol = input$m, nrow=length(tm))
-
-    for(i in 1:input$m){
-      idm <- indicies[i]
-      outSine[,i] <-  seriesSpec$y[idm]*sin(2*pi*seriesSpec$xScaled[idm]*tm)
-    }
-    colnames(outSine) <- paste0(round(seriesSpec$xScaled[indicies],3),"Hz")
-    sins2plot <- as_tibble(outSine) %>% add_column(tm) %>%
+    sins2plot <- outSine %>%
+      filter(cycleIdx<3) %>%
+      select(-c("tmCycle","cycleIdx")) %>%
       pivot_longer(-tm)
 
     pSin <- ggplot(sins2plot) +
@@ -375,127 +600,16 @@ server <- function(input, output, session) {
   },bg="transparent")
 
 
-  output$datPlotOsc <- renderImage({
-    req(getSpec())
-    req(input$m)
-    seriesSpec <- RVs$seriesSpec
 
 
-
-    # get m biggest peak
-    indicies <- order(seriesSpec$y,decreasing = TRUE)[1:input$m]
-
-    # make into wave
-    idm <- indicies[1]
-    tm <- seq(from = 0, to = input$tSec, by = 1/sampRatePlot)
-    ###
-    f1 <- seriesSpec$xScaled[idm]
-    maxCycleIdx <- ceiling((1/f1) * (sampRatePlot) + 1)
-    nCycles <- ceiling(length(tm)/maxCycleIdx)
-    cycleIdx <- rep(1:maxCycleIdx,each=maxCycleIdx)[1:length(tm)]
-    tmCycle <- rep(tm[1:maxCycleIdx],times=nCycles)[1:length(tm)]
-    ###
-    outSine <- matrix(0,ncol = input$m, nrow=length(tm))
-
-    for(i in 1:input$m){
-      idm <- indicies[i]
-      outSine[,i] <-  seriesSpec$y[idm]*sin(2*pi*seriesSpec$xScaled[idm]*tm)
-    }
-    colnames(outSine) <- paste0(round(seriesSpec$xScaled[indicies],3),"Hz")
-
-    sins2plot <- as_tibble(outSine) %>% add_column(tm,tmCycle,cycleIdx)
-    # trim to last complete cycle? so not jagged
-    sins2plot <- sins2plot %>%
-      filter(cycleIdx < nCycles) %>%
-      pivot_longer(-c(tm,cycleIdx,tmCycle)) %>%
-      mutate(valueS = scale(value)[,1]) %>%
-      rename(x=tmCycle,y=value) %>%
-      mutate(x=rescale(x, to=c(-1, 1)),
-             y=rescale(y, to=c(-0.9, 0.9)))
-
-    # make the plot bnd
-    bndBox <- data.frame(x=c(-Inf,-Inf,Inf,Inf, -Inf),
-                         y=c(-Inf,Inf,Inf,-Inf, -Inf),
-                         id="bnd")
-
-    # make the porthole mask
-    hole <- data.frame(
-      x = cos(seq(0, 2*pi, length.out = 360)),
-      y = sin(seq(0, 2*pi, length.out = 360)),
-      id="circle"
-    )
-
-    porthole <- rbind(bndBox,hole)
-
-    p <- ggplot(sins2plot,aes(x=x,y=y,color=name)) +
-      geom_line() + coord_fixed() +
-      geom_polygon(data=porthole,
-                   aes(x = x, y = y), fill = "black",
-                   inherit.aes = FALSE) +
-      geom_polygon(data=hole,
-                   aes(x = x, y = y), color = "grey90",fill=NA,
-                   inherit.aes = FALSE) +
-      theme_oscilloscope()
-
-    pAnim <- p +  transition_time(cycleIdx)
-
-
-    #    outfile <- tempfile(fileext='.gif')
-
-    anim_save("www/osc.gif",
-              withProgress({
-                animate(
-                  plot = pAnim,
-                  height = 200, width = 200, units = "px",
-                  nframes = 50,
-                  fps=10)
-              },message = 'Generating Animation')
-    )
-
-
-    list(src = "www/osc.gif",
-         contentType = 'image/gif',
-         width = 200,
-         height = 200,
-         alt = "Osc"
-    )
-  },deleteFile = FALSE)
-
-
-  observeEvent(input$genWav, {
-    req(getSpec())
-    req(input$m)
-    req(input$tSec)
-
-    seriesSpec <- RVs$seriesSpec
-    xScaled <- seriesSpec$xScaled
-    y <- seriesSpec$y
-    # get m biggest peaks
-    indicies <- order(y,decreasing = TRUE)[1:input$m]
-
-    # make into wave -- vectorize this?
-    tVec <- seq(from = 0, to = input$tSec, by = sampRateAudio^-1)
-    theWave <- rep(0,nrow = length(tVec))
-    for(i in 1:input$m){
-      idm <- indicies[i]
-      theWave <- theWave + y[idm]*sin(2*pi*xScaled[idm]*tVec)
-    }
-
-    theWave <- Wave(left = theWave, right= theWave,
-                    samp.rate = sampRateAudio, bit=16)
-    theWave <- normalize(object = theWave, unit = "16") # 16 bit
-
-    RVs$theWave <- theWave
-    writeWave(theWave, filename="www/out.wav", extensible = TRUE)
-    insertUI(selector = "#AUDIO_MY",
-             where = "afterEnd",
-             ui = tags$audio(src = "www/out.wav", type = "audio/wav",
-                             autoplay = NA, controls = NA,
-                             style="display:none;"),
-             immediate = TRUE)
-  })
+  ##############################################################
+  #
+  # File handling
+  #
+  ##############################################################
 
   output$saveWav <- downloadHandler(
+    #req(getWave()),
     filename = function() {
       paste("out", "wav", sep=".")
     },
@@ -504,15 +618,14 @@ server <- function(input, output, session) {
     }
   )
 
-  output$saveGif <- downloadHandler(
+  output$saveOsc <- downloadHandler(
     filename = function() {
-      paste("oscilloscope", "gif", sep=".")
+      paste("oscilloscope", "mp4", sep=".")
     },
     content = function(file) {
-      file.copy(from = "www/osc.gif",file,overwrite = TRUE)
-    }, contentType = "image/gif"
+      file.copy(from = "www/osc.mp4",file,overwrite = TRUE)
+    }, contentType = "video/mp4"
   )
-
 
 }
 
