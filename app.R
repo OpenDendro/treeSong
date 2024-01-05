@@ -1,11 +1,11 @@
-#list of packages required
-list.of.packages <- c("shiny","shinyWidgets","tidyverse","tuneR","cowplot","markdown","shinythemes","shinyjs","shinyBS","shinyjs","scales","gganimate","transformr", "gifski", "av", "shinycssloaders")
-
-#checking missing packages from list
-new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
-
-#install missing ones
-if(length(new.packages)) install.packages(new.packages, dependencies = TRUE)
+# #list of packages required
+# list.of.packages <- c("shiny","shinyWidgets","tidyverse","tuneR","cowplot","markdown","shinythemes","shinyjs","shinyBS","shinyjs","scales","gganimate","transformr", "gifski", "av", "shinycssloaders")
+#
+# #checking missing packages from list
+# new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+#
+# #install missing ones
+# if(length(new.packages)) install.packages(new.packages, dependencies = TRUE)
 
 library(shiny)
 library(shinyWidgets)
